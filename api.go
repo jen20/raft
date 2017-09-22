@@ -4,13 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-hclog"
 )
 
 var (
@@ -103,7 +103,7 @@ type Raft struct {
 	localAddr ServerAddress
 
 	// Used for our logging
-	logger *log.Logger
+	logger hclog.Logger
 
 	// LogStore provides durable storage for logs
 	logs LogStore
@@ -164,7 +164,7 @@ type Raft struct {
 // configuration on all the Voter servers. There is no need to bootstrap
 // Nonvoter and Staging servers.
 //
-// One sane approach is to boostrap a single server with a configuration
+// One sane approach is to bootstrap a single server with a configuration
 // listing just itself as a Voter, then invoke AddVoter() on it to add other
 // servers to the cluster.
 func BootstrapCluster(conf *Config, logs LogStore, stable StableStore,
@@ -394,14 +394,17 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 	}
 
 	// Ensure we have a LogOutput.
-	var logger *log.Logger
+	var logger hclog.Logger
 	if conf.Logger != nil {
 		logger = conf.Logger
 	} else {
 		if conf.LogOutput == nil {
 			conf.LogOutput = os.Stderr
 		}
-		logger = log.New(conf.LogOutput, "", log.LstdFlags)
+
+		logger = hclog.New(&hclog.LoggerOptions{
+			Output: conf.LogOutput,
+		})
 	}
 
 	// Try to restore the current term.
@@ -467,7 +470,7 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 	r.setState(Follower)
 
 	// Start as leader if specified. This should only be used
-	// for testing purposes.
+
 	if conf.StartAsLeader {
 		r.setState(Leader)
 		r.setLeader(r.localAddr)
@@ -487,14 +490,14 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 	for index := snapshotIndex + 1; index <= lastLog.Index; index++ {
 		var entry Log
 		if err := r.logs.GetLog(index, &entry); err != nil {
-			r.logger.Printf("[ERR] raft: Failed to get log at %d: %v", index, err)
+			r.logger.Error("Failed to get log", "index", index, "error", err)
 			panic(err)
 		}
 		r.processConfigurationLogEntry(&entry)
 	}
 
-	r.logger.Printf("[INFO] raft: Initial configuration (index=%d): %+v",
-		r.configurations.latestIndex, r.configurations.latest.Servers)
+	r.logger.Info("initial configuration", "index", r.configurations.latestIndex,
+			"servers", r.configurations.latest.Servers)
 
 	// Setup a heartbeat fast-path to avoid head-of-line
 	// blocking where possible. It MUST be safe for this
@@ -514,7 +517,7 @@ func NewRaft(conf *Config, fsm FSM, logs LogStore, stable StableStore, snaps Sna
 func (r *Raft) restoreSnapshot() error {
 	snapshots, err := r.snapshots.List()
 	if err != nil {
-		r.logger.Printf("[ERR] raft: Failed to list snapshots: %v", err)
+		r.logger.Error("Failed to list snapshots", "error", err)
 		return err
 	}
 
@@ -522,18 +525,18 @@ func (r *Raft) restoreSnapshot() error {
 	for _, snapshot := range snapshots {
 		_, source, err := r.snapshots.Open(snapshot.ID)
 		if err != nil {
-			r.logger.Printf("[ERR] raft: Failed to open snapshot %v: %v", snapshot.ID, err)
+			r.logger.Error("Failed to open snapshot", "snapshot_id", snapshot.ID, "error", err)
 			continue
 		}
 		defer source.Close()
 
 		if err := r.fsm.Restore(source); err != nil {
-			r.logger.Printf("[ERR] raft: Failed to restore snapshot %v: %v", snapshot.ID, err)
+			r.logger.Error("Failed to restore snapshot", "snapshot_id", snapshot.ID, "error", err)
 			continue
 		}
 
 		// Log success
-		r.logger.Printf("[INFO] raft: Restored from snapshot %v", snapshot.ID)
+		r.logger.Info("Restored from snapshot", "snapshot_id", snapshot.ID)
 
 		// Update the lastApplied so we don't replay old logs
 		r.setLastApplied(snapshot.Index)
@@ -955,7 +958,7 @@ func (r *Raft) Stats() map[string]string {
 
 	future := r.GetConfiguration()
 	if err := future.Error(); err != nil {
-		r.logger.Printf("[WARN] raft: could not get configuration for Stats: %v", err)
+		r.logger.Warn("Could not get configuration for stats", "error", err)
 	} else {
 		configuration := future.Configuration()
 		s["latest_configuration_index"] = toString(future.Index())

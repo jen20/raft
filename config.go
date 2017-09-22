@@ -3,8 +3,9 @@ package raft
 import (
 	"fmt"
 	"io"
-	"log"
 	"time"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 // These are the versions of the protocol (which includes RPC messages as
@@ -190,9 +191,9 @@ type Config struct {
 	// Defaults to os.Stderr.
 	LogOutput io.Writer
 
-	// Logger is a user-provided logger. If nil, a logger writing to LogOutput
-	// is used.
-	Logger *log.Logger
+	// Logger is a user-provided logger. If nil, the default hclog logger
+	// is used, with LogOutput as a sink.
+	Logger hclog.Logger
 }
 
 // DefaultConfig returns a Config with usable defaults.
